@@ -3,7 +3,7 @@ from datetime import date, datetime, timezone
 from enum import StrEnum
 
 from sqlalchemy import (
-    Boolean, Date, DateTime, Enum, ForeignKey, Index, Integer, String, Text, UniqueConstraint,
+    JSON, Boolean, Date, DateTime, Enum, ForeignKey, Index, Integer, String, Text, UniqueConstraint,
 )
 from sqlalchemy import false as sa_false
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -171,7 +171,8 @@ class Webhook(Base):
     url: Mapped[str] = mapped_column(Text, unique=True)  # Discord adresi gizli anahtar içerir: herkese gösterilmez
     tur: Mapped[WebhookTuru] = mapped_column(_enum(WebhookTuru))
     ad: Mapped[str | None] = mapped_column(String(100))
-    iletisim: Mapped[str | None] = mapped_column(String(200))
+    iletisim: Mapped[str | None] = mapped_column(String(200))  # bildirim e-postası (yeni kayıtlarda zorunlu)
+    davet: Mapped[str | None] = mapped_column(String(100))  # Discord sunucu daveti (Discord'da zorunlu)
     durum: Mapped[WebhookDurumu] = mapped_column(
         _enum(WebhookDurumu), default=WebhookDurumu.onay_bekliyor, index=True
     )
@@ -182,3 +183,6 @@ class Webhook(Base):
     son_sonuc: Mapped[str | None] = mapped_column(String(300))
     ardisik_hata: Mapped[int] = mapped_column(Integer, default=0)
     gonderim_sayisi: Mapped[int] = mapped_column(Integer, default=0)
+    # Discord webhook'larında panelden çekilen sunucu/kanal bilgisi (bkz. webhooks.discord_bilgisi_cek)
+    discord_bilgisi: Mapped[dict | None] = mapped_column(JSON)
+    discord_bilgisi_zamani: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

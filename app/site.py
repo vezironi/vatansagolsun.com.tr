@@ -324,11 +324,12 @@ def webhook_router_olustur(limiter: Limiter) -> APIRouter:
         s: Oturum,
         url: Annotated[str, Form()] = "",
         ad: Annotated[str, Form()] = "",
-        iletisim: Annotated[str, Form()] = "",
+        eposta: Annotated[str, Form()] = "",
+        davet: Annotated[str, Form()] = "",
     ):
-        form = {"url": url, "ad": ad, "iletisim": iletisim}
+        form = {"url": url, "ad": ad, "eposta": eposta, "davet": davet}
         try:
-            kayit = webhooks.kayit_ekle(s, url=url, ad=ad, iletisim=iletisim)
+            kayit = webhooks.kayit_ekle(s, url=url, ad=ad, eposta=eposta, davet=davet)
         except webhooks.WebhookHatasi as hata:
             return _webhook_sayfasi(request, hata=str(hata), form=form, status_code=400)
         return templates.TemplateResponse(request, "webhook_eklendi.html", {

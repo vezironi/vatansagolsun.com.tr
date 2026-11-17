@@ -435,6 +435,10 @@ Ziyaretçiler sitedeki **Webhooks** sayfasından (`/webhooks`) bir adres bıraka
 - **Discord webhook adresi** (`https://discord.com/api/webhooks/…`) ise hazır bir Discord kartı gönderilir: üstte "Şehidimiz var" mesajı; kartta yazar (Vatan Sağ Olsun), şehidin rütbesi ve adı, nasıl şehit düştüğü, şehadet tarihi, yeri, memleketi ve kurumu; **büyük görsel olarak Türk bayrağı**, **küçük görsel olarak şehidin fotoğrafı** (varsa) ve anma yazılı alt bilgi.
 - **Başka bir adres** ise şehit bilgileri JSON nesnesi olarak `POST` edilir. İstek, webhook'a özel bir anahtarla imzalanır (`X-Vatansagolsun-Imza` başlığı); ayrıntılar ve örnek gövde Webhooks sayfasında.
 
+**Zorunlu alanlar:** Webhook eklerken **ad** ve bildirimler için bir **e-posta** adresi zorunludur. Adres Discord webhook'uysa sunucunun **davet bağlantısı** da (`https://discord.gg/…`) istenir.
+
+**Discord sunucu bilgisi:** Paneldeki Discord webhook kartlarında **Sunucu bilgisini getir** düğmesi webhook'un bağlı olduğu sunucu ve kanal kimliğini, webhook'un Discord'daki adını çeker. Verilen davet bağlantısından sunucunun adı ve üye sayısı alınır, davetin webhook'la aynı sunucuya ait olup olmadığı denetlenir (ait değilse kartta uyarı çıkar). Sunucunun "Sunucu Widget'ı" açıksa çevrim içi sayısı da gelir. Sayfayı açmak Discord'a istek atmaz; yalnızca düğmeye basınca istek gider.
+
 **Ne zaman gider?** Yalnızca siz panelde bir kaydı onaylayıp yayına aldığınızda ve şehadet tarihi **son 7 gün içindeyse**. Toplu aktarımla gelen geçmiş kayıtlar, yılı belli olup tarihi belli olmayan kayıtlar ve "İsimsiz" kayıtlar duyurulmaz. Her kayıt **yalnızca bir kez** duyurulur; yayından kaldırıp yeniden onaylasanız da ikinci kez gitmez.
 
 **Onay:** Eklenen her webhook paneldeki **Webhooklar** sekmesine **onay bekliyor** olarak düşer. Siz onaylayana kadar o adrese hiçbir istek gönderilmez. **Onayla** düğmesine basınca adrese bir deneme mesajı gider; başarılıysa webhook aktif olur, başarısızsa hata yazılır ve onay bekliyor olarak kalır. Aynı sekmeden webhook'ları durdurabilir, reddedebilir ya da silebilirsiniz. Discord adreslerindeki gizli anahtar panelde de gösterilmez.

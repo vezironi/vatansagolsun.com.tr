@@ -16,6 +16,8 @@ from app.models import Durum, Sehit, Webhook, WebhookDurumu, WebhookTuru
 DISCORD = "https://discord.com/api/webhooks/123456789012345678/AbC-dEf_123"
 GENEL = "https://ornek.com.tr/kanca?kaynak=vso"
 GENEL_IP = "93.184.215.14"
+DISCORD_FORM = {"url": DISCORD, "ad": "Kanal", "eposta": "a@b.co", "davet": "discord.gg/abc123"}
+GENEL_FORM = {"url": GENEL, "ad": "Sunucu", "eposta": "a@b.co"}
 
 
 def _cozumleyici(tablo: dict[str, list[str]]):
@@ -206,36 +208,37 @@ def test_sayfa_navbarda_ve_ornekler_gorunur(client):
 
 
 def test_eklenen_webhook_onay_bekler_ve_hic_istek_atilmaz(client, session, ag):
-    r = client.post("/webhooks", data={"url": DISCORD, "ad": "Duyurular", "iletisim": "a@b.c"})
+    r = client.post("/webhooks", data={**DISCORD_FORM, "ad": "Duyurular"})
     assert r.status_code == 200 and "onay bekliyor" in r.text
     w = session.query(Webhook).one()
-    assert (w.durum, w.tur, w.ad) == (WebhookDurumu.onay_bekliyor, WebhookTuru.discord, "Duyurular")
+    assert (w.durum, w.tur, w.ad, w.iletisim, w.davet) == (
+        WebhookDurumu.onay_bekliyor, WebhookTuru.discord, "Duyurular", "a@b.co", "https://discord.gg/abc123")
     assert ag.istekler == []  # ziyaretçi sunucumuza istek attıramaz
     anahtar = re.search(r'<pre class="anahtar"><code>([^<]+)</code>', r.text).group(1)
     assert w.silme_anahtari_ozeti == hashlib.sha256(anahtar.encode()).hexdigest()  # anahtarın kendisi saklanmaz
     assert "İmza anahtarınız" not in r.text  # Discord'da imza yok
 
-    assert client.post("/webhooks", data={"url": DISCORD}).status_code == 400  # aynı adres
+    assert client.post("/webhooks", data=DISCORD_FORM).status_code == 400  # aynı adres
     assert client.post("/webhooks/sil", data={"anahtar": "yanlis"}).status_code == 400
     assert "silindi" in client.post("/webhooks/sil", data={"anahtar": anahtar}).text
     assert session.query(Webhook).count() == 0
 
 
 def test_genel_webhook_icin_imza_anahtari_gosterilir(client, session):
-    r = client.post("/webhooks", data={"url": GENEL})
+    r = client.post("/webhooks", data=GENEL_FORM)
     assert "İmza anahtarınız" in r.text and session.query(Webhook).one().imza_anahtari in r.text
 
 
 def test_uygunsuz_adres_formda_hata(client, session):
-    r = client.post("/webhooks", data={"url": "https://ic.ornek.com.tr/x", "ad": "Ad"})
+    r = client.post("/webhooks", data={**GENEL_FORM, "url": "https://ic.ornek.com.tr/x", "ad": "Ad"})
     assert r.status_code == 400 and "genel internette değil" in r.text and 'value="Ad"' in r.text
     assert session.query(Webhook).count() == 0
 
 
 def test_onay_bekleyen_tavani(client, session, monkeypatch):
     monkeypatch.setattr(webhooks, "BEKLEYEN_EN_COK", 1)
-    assert client.post("/webhooks", data={"url": DISCORD}).status_code == 200
-    r = client.post("/webhooks", data={"url": GENEL})
+    assert client.post("/webhooks", data=DISCORD_FORM).status_code == 200
+    r = client.post("/webhooks", data=GENEL_FORM)
     assert r.status_code == 400 and "çok fazla" in r.text
 
 
@@ -371,3 +374,146 @@ def test_deneme_basarisizsa_hata_gosterilir(panel_client, csrf, session, monkeyp
     assert "gönderilemedi: HTTP 404" in r.text
     session.refresh(w)
     assert w.durum == WebhookDurumu.kapali  # silinmiş Discord webhook'u kapanır
+
+
+# --- Discord sunucu bilgisi ----------------------------------------------------------------
+
+def _discord_yaniti(webhook_kodu=200, widget_kodu=200, widget=None):
+    istekler = []
+
+    def isle(istek: httpx.Request) -> httpx.Response:
+        istekler.append(istek)
+        if istek.url.path.endswith("/widget.json"):
+            if widget_kodu != 200:
+                return httpx.Response(widget_kodu, json={"message": "Widget Disabled", "code": 50004})
+            return httpx.Response(200, json=widget or {
+                "id": "111", "name": "Şehitler Anısına", "presence_count": 42,
+                "instant_invite": "https://discord.com/invite/abc123",
+            })
+        if webhook_kodu != 200:
+            return httpx.Response(webhook_kodu, json={"message": "Unknown Webhook", "code": 10015})
+        return httpx.Response(200, json={"id": "123456789012345678", "type": 1, "guild_id": "111",
+                                         "channel_id": "222", "name": "Duyuru Botu", "token": "AbC-dEf_123"})
+    return istekler, httpx.MockTransport(isle)
+
+
+def test_discord_bilgisi_widget_acikken_sunucu_adi_gelir(monkeypatch):
+    istekler, tasiyici = _discord_yaniti()
+    monkeypatch.setattr(webhooks, "TASIYICI", tasiyici)
+    bilgi = webhooks.discord_bilgisi_cek(DISCORD)
+    assert bilgi == {"webhook_adi": "Duyuru Botu", "sunucu_id": "111", "kanal_id": "222", "widget": True,
+                     "sunucu_adi": "Şehitler Anısına", "cevrimici": 42, "davet": "https://discord.com/invite/abc123"}
+    assert [i.method for i in istekler] == ["GET", "GET"]
+    assert istekler[0].url.path == "/api/webhooks/123456789012345678/AbC-dEf_123"
+    assert istekler[1].url.path == "/api/v10/guilds/111/widget.json"
+    assert all(i.headers["Host"] == "discord.com" for i in istekler)  # IP'ye sabitli, alan adı korunur
+
+
+def test_discord_bilgisi_widget_kapaliyken_yalniz_kimlikler(monkeypatch):
+    _, tasiyici = _discord_yaniti(widget_kodu=403)
+    monkeypatch.setattr(webhooks, "TASIYICI", tasiyici)
+    bilgi = webhooks.discord_bilgisi_cek(DISCORD)
+    assert bilgi == {"webhook_adi": "Duyuru Botu", "sunucu_id": "111", "kanal_id": "222", "widget": False}
+
+
+def test_discord_bilgisi_supheli_davet_ve_silinmis_webhook(monkeypatch):
+    _, tasiyici = _discord_yaniti(widget={"name": "X", "instant_invite": "javascript:alert(1)"})
+    monkeypatch.setattr(webhooks, "TASIYICI", tasiyici)
+    assert webhooks.discord_bilgisi_cek(DISCORD)["davet"] is None
+    _, tasiyici = _discord_yaniti(webhook_kodu=404)
+    monkeypatch.setattr(webhooks, "TASIYICI", tasiyici)
+    assert "bulunamadı (HTTP 404)" in webhooks.discord_bilgisi_cek(DISCORD)["hata"]
+
+
+def test_panelde_discord_sunucu_bilgisi(panel_client, csrf, session, monkeypatch):
+    w = _webhook(session, DISCORD, durum=WebhookDurumu.onay_bekliyor)
+    istekler, tasiyici = _discord_yaniti()
+    monkeypatch.setattr(webhooks, "TASIYICI", tasiyici)
+    assert "Sunucu bilgisini getir" in panel_client.get("/panel/webhooklar").text
+    assert istekler == []  # sayfayı açmak istek attırmaz
+    h = panel_client.post(f"/panel/webhooklar/{w.id}/discord", data={"csrf": csrf(panel_client)}).text
+    assert "Şehitler Anısına" in h and "Çevrim içi: 42" in h and "https://discord.com/channels/111/222" in h
+    assert "Sunucu bilgisini yenile" in h and "AbC-dEf_123" not in h  # anahtar yine gizli
+    session.refresh(w)
+    assert w.durum == WebhookDurumu.onay_bekliyor and w.discord_bilgisi["sunucu_id"] == "111"
+
+
+def test_panelde_discord_bilgisi_hatasi_ve_genel_webhook(panel_client, csrf, session, monkeypatch):
+    w = _webhook(session, DISCORD)
+    _, tasiyici = _discord_yaniti(webhook_kodu=404)
+    monkeypatch.setattr(webhooks, "TASIYICI", tasiyici)
+    h = panel_client.post(f"/panel/webhooklar/{w.id}/discord", data={"csrf": csrf(panel_client)}).text
+    assert "Sunucu bilgisi alınamadı" in h
+    g = _webhook(session, GENEL)
+    assert panel_client.post(f"/panel/webhooklar/{g.id}/discord", data={"csrf": csrf(panel_client)}).status_code == 400
+    assert "Sunucu bilgisini getir" not in panel_client.get("/panel/webhooklar").text.split(f'id="webhook-{g.id}"')[1]
+
+
+# --- zorunlu alanlar ------------------------------------------------------------------------
+
+@pytest.mark.parametrize("ek, ileti", [
+    ({"ad": "  "}, "bir ad yazın"),
+    ({"eposta": ""}, "e-posta adresi yazın"),
+    ({"eposta": "posta-degil"}, "E-posta adresi geçersiz"),
+    ({"davet": ""}, "davet bağlantısını yazın"),
+    ({"davet": "https://ornek.com/invite/abc"}, "Davet bağlantısı geçersiz"),
+])
+def test_zorunlu_alanlar(client, session, ag, ek, ileti):
+    r = client.post("/webhooks", data={**DISCORD_FORM, **ek})
+    assert r.status_code == 400 and ileti in r.text
+    assert session.query(Webhook).count() == 0 and ag.istekler == []
+
+
+@pytest.mark.parametrize("girdi", ["https://discord.gg/abc123", "discord.gg/abc123/", "https://discord.com/invite/abc123",
+                                   "https://www.discordapp.com/invite/abc123", "HTTPS://Discord.GG/abc123"])
+def test_davet_bicimleri_duzenlenir(girdi):
+    assert webhooks.davet_kodu(girdi) == "abc123"
+
+
+def test_genel_webhookta_davet_gerekmez_ve_saklanmaz(client, session):
+    assert client.post("/webhooks", data={**GENEL_FORM, "davet": "discord.gg/abc123"}).status_code == 200
+    assert session.query(Webhook).one().davet is None
+
+
+def _davet_yaniti(sunucu_id="111", kod=200):
+    istekler, onceki = _discord_yaniti(widget_kodu=403)
+
+    def isle(istek):
+        if "/invites/" in istek.url.path:
+            istekler.append(istek)
+            if kod != 200:
+                return httpx.Response(kod, json={"message": "Unknown Invite", "code": 10006})
+            return httpx.Response(200, json={"code": "abc123", "guild": {"id": sunucu_id, "name": "Anma Sunucusu"},
+                                             "approximate_member_count": 350, "approximate_presence_count": 40})
+        return onceki.handle_request(istek)
+    return istekler, httpx.MockTransport(isle)
+
+
+def test_davet_sunucu_adini_verir_ve_eslesmeyi_denetler(monkeypatch):
+    istekler, tasiyici = _davet_yaniti()
+    monkeypatch.setattr(webhooks, "TASIYICI", tasiyici)
+    bilgi = webhooks.discord_bilgisi_cek(DISCORD, "https://discord.gg/abc123")
+    assert (bilgi["sunucu_adi"], bilgi["uye_sayisi"], bilgi["cevrimici"], bilgi["davet_eslesiyor"]) == (
+        "Anma Sunucusu", 350, 40, True)
+    assert istekler[-1].url.path == "/api/v10/invites/abc123" and istekler[-1].url.params["with_counts"] == "true"
+
+    _, tasiyici = _davet_yaniti(sunucu_id="999")
+    monkeypatch.setattr(webhooks, "TASIYICI", tasiyici)
+    bilgi = webhooks.discord_bilgisi_cek(DISCORD, "https://discord.gg/abc123")
+    assert bilgi["davet_eslesiyor"] is False and "sunucu_adi" not in bilgi and bilgi["davet_sunucu_id"] == "999"
+
+    _, tasiyici = _davet_yaniti(kod=404)
+    monkeypatch.setattr(webhooks, "TASIYICI", tasiyici)
+    assert webhooks.discord_bilgisi_cek(DISCORD, "https://discord.gg/abc123")["davet_hatasi"] == \
+        "davet geçersiz ya da süresi dolmuş"
+
+
+def test_panelde_davet_eposta_ve_eslesmeme_uyarisi(panel_client, csrf, session, monkeypatch):
+    w = _webhook(session, DISCORD, durum=WebhookDurumu.onay_bekliyor, ad="Kanal", iletisim="a@b.co",
+                 davet="https://discord.gg/abc123")
+    h = panel_client.get("/panel/webhooklar").text
+    assert 'href="mailto:a@b.co"' in h and 'href="https://discord.gg/abc123"' in h
+    _, tasiyici = _davet_yaniti(sunucu_id="999")
+    monkeypatch.setattr(webhooks, "TASIYICI", tasiyici)
+    h = panel_client.post(f"/panel/webhooklar/{w.id}/discord", data={"csrf": csrf(panel_client)}).text
+    assert "başka bir sunucuya ait" in h and "Anma Sunucusu" in h

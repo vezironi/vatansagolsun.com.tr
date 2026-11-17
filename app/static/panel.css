@@ -35,6 +35,9 @@ button:hover { background: var(--red-soft); }
 .islemler form { margin: 0; }
 .islemler .ornek-gonder { display: flex; gap: 6px; align-items: center; }
 .islemler .ornek-gonder input { width: 190px; background: var(--bg); border: 1px solid var(--line); color: var(--text); padding: 8px 10px; border-radius: 4px; font: inherit; font-size: 13px; }
+.discord-bilgi { border-left: 3px solid var(--line); padding: 4px 0 4px 12px; margin: 8px 0; }
+.discord-bilgi p { margin: 0 0 4px; }
+.discord-bilgi .satir-ici { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 6px 0 0; }
 .dugme { color: var(--text); border: 1px solid var(--line); padding: 9px 14px; border-radius: 4px; text-decoration: none; }
 button.ikincil { background: transparent; border: 1px solid var(--line); color: var(--muted); }
 .duzenle { display: grid; gap: 14px; max-width: 560px; }

@@ -19,7 +19,7 @@ from app.analiz import VARSAYILAN_SIRA, analiz_yapilandirildi_mi, park_temizle, 
 from app.dates import TZ, bugun
 from app.db import get_session
 from app.kaynaklar import haber
-from app.models import Bildirim, Durum, Hassasiyet, Kategori, KaynakDurumu, Sehit, Webhook, WebhookDurumu
+from app.models import Bildirim, Durum, Hassasiyet, Kategori, KaynakDurumu, Sehit, Webhook, WebhookDurumu, WebhookTuru
 from app.toplayici import RESMI_KAYNAKLAR, SAYAC_KODU, toplayici_calisiyor_mu, toplayici_kodu
 from app.schemas import SehitVeri
 from app.statik import statik
@@ -606,6 +606,15 @@ def panel_router_olustur(limiter: Limiter) -> APIRouter:
                      else f"Deneme şehit mesajı gönderilemedi: {mesaj}")
         request.session["webhook_sonuc"] = {"metin": metin, "tamam": basarili}
         return RedirectResponse("/panel/webhooklar", status_code=303)
+
+    @router.post("/webhooklar/{webhook_id:int}/discord")
+    def webhook_discord(request: Request, _: Yonetici, s: Oturum, webhook_id: int, csrf: Annotated[str, Form()] = ""):
+        csrf_dogrula(request, csrf)
+        webhook = _webhook_getir(s, webhook_id)
+        if webhook.tur != WebhookTuru.discord:
+            raise HTTPException(status_code=400, detail="Bu webhook Discord webhook'u değil")
+        webhooks.discord_bilgisi_guncelle(s, webhook)  # sonuç (ya da hata) kartta gösterilir
+        return RedirectResponse(f"/panel/webhooklar#webhook-{webhook.id}", status_code=303)
 
     @router.post("/webhooklar/{webhook_id:int}/reddet")
     def webhook_reddet(request: Request, _: Yonetici, s: Oturum, webhook_id: int, csrf: Annotated[str, Form()] = ""):

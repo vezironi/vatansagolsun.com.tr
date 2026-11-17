@@ -113,8 +113,8 @@ def adres_dogrula(ham: str) -> tuple[str, WebhookTuru]:
     return duzgun, tur
 
 
-def gonder(url: str, govde: bytes, basliklar: dict[str, str]) -> httpx.Response:
-    """Gövdeyi, adresin doğrulanmış IP'sine sabitlenmiş tek bir POST ile gönderir."""
+def _istek(yontem: str, url: str, govde: bytes | None = None, basliklar: dict[str, str] | None = None) -> httpx.Response:
+    """Adresin doğrulanmış IP'sine sabitlenmiş tek bir istek atar (yönlendirme izlenmez)."""
     p = urlsplit(url)
     port = p.port or 443
     ip = _guvenli_ipler(p.hostname or "", port)[0]
@@ -122,12 +122,18 @@ def gonder(url: str, govde: bytes, basliklar: dict[str, str]) -> httpx.Response:
     hedef = urlunsplit(("https", f"{sunucu}:{port}", p.path or "/", p.query, ""))
     host = p.hostname if port == 443 else f"{p.hostname}:{port}"
     ua = f"vatansagolsun-webhook/1.0 (+{get_settings().site_url})"
+    ek = {"Content-Type": "application/json"} if govde is not None else {}
     with httpx.Client(transport=TASIYICI, timeout=ZAMAN_ASIMI_SN, follow_redirects=False) as istemci:
-        return istemci.post(
-            hedef, content=govde,
-            headers={"Host": host, "Content-Type": "application/json", "User-Agent": ua, **basliklar},
+        return istemci.request(
+            yontem, hedef, content=govde,
+            headers={"Host": host, "User-Agent": ua, **ek, **(basliklar or {})},
             extensions={"sni_hostname": p.hostname},  # TLS: SNI ve sertifika alan adına göre
         )
+
+
+def gonder(url: str, govde: bytes, basliklar: dict[str, str]) -> httpx.Response:
+    """Gövdeyi, adresin doğrulanmış IP'sine sabitlenmiş tek bir POST ile gönderir."""
+    return _istek("POST", url, govde, basliklar)
 
 
 # --- gövdeler -------------------------------------------------------------------------------
@@ -350,21 +356,46 @@ class YeniKayit:
     silme_anahtari: str
 
 
-def kayit_ekle(s: Session, *, url: str, ad: str | None, iletisim: str | None) -> YeniKayit:
+_EPOSTA = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s.]+")
+_DAVET_GIRDISI = re.compile(
+    r"(?:https?://)?(?:www\.)?(?:discord\.gg|(?:ptb\.|canary\.)?discord(?:app)?\.com/invite)/([A-Za-z0-9-]{2,50})/?",
+    re.IGNORECASE,
+)
+
+
+def davet_kodu(davet: str | None) -> str | None:
+    """Davet bağlantısındaki kod (discord.gg/… ya da discord.com/invite/…); değilse None."""
+    eslesme = _DAVET_GIRDISI.fullmatch((davet or "").strip())
+    return eslesme.group(1) if eslesme else None
+
+
+def kayit_ekle(s: Session, *, url: str, ad: str | None, eposta: str | None, davet: str | None = None) -> YeniKayit:
     duzgun, tur = adres_dogrula(url)
-    ad = (ad or "").strip() or None
-    iletisim = (iletisim or "").strip() or None
-    if ad and len(ad) > AD_EN_UZUN:
+    ad = (ad or "").strip()
+    eposta = (eposta or "").strip()
+    if not ad:
+        raise WebhookHatasi("Lütfen webhook için bir ad yazın.")
+    if len(ad) > AD_EN_UZUN:
         raise WebhookHatasi(f"Ad en fazla {AD_EN_UZUN} karakter olabilir.")
-    if iletisim and len(iletisim) > ILETISIM_EN_UZUN:
-        raise WebhookHatasi(f"İletişim bilgisi en fazla {ILETISIM_EN_UZUN} karakter olabilir.")
+    if not eposta:
+        raise WebhookHatasi("Lütfen bildirimler için bir e-posta adresi yazın.")
+    if len(eposta) > ILETISIM_EN_UZUN or not _EPOSTA.fullmatch(eposta):
+        raise WebhookHatasi("E-posta adresi geçersiz.")
+    davet_adresi = None
+    if tur == WebhookTuru.discord:
+        if not (davet or "").strip():
+            raise WebhookHatasi("Discord webhook'ları için sunucunuzun davet bağlantısını yazın.")
+        if (kod := davet_kodu(davet)) is None:
+            raise WebhookHatasi("Davet bağlantısı geçersiz (https://discord.gg/… biçiminde olmalı).")
+        davet_adresi = f"https://discord.gg/{kod}"
     if s.scalar(select(Webhook.id).where(Webhook.url == duzgun)) is not None:
         raise WebhookHatasi("Bu adres zaten kayıtlı.")
     bekleyen = s.scalar(select(func.count(Webhook.id)).where(Webhook.durum == WebhookDurumu.onay_bekliyor))
     if bekleyen >= BEKLEYEN_EN_COK:
         raise WebhookHatasi("Şu anda onay bekleyen çok fazla webhook var; lütfen daha sonra tekrar deneyin.")
     silme = secrets.token_urlsafe(24)
-    webhook = Webhook(url=duzgun, tur=tur, ad=ad, iletisim=iletisim, durum=WebhookDurumu.onay_bekliyor,
+    webhook = Webhook(url=duzgun, tur=tur, ad=ad, iletisim=eposta, davet=davet_adresi,
+                      durum=WebhookDurumu.onay_bekliyor,
                       silme_anahtari_ozeti=_ozet(silme), imza_anahtari=secrets.token_hex(32),
                       ardisik_hata=0, gonderim_sayisi=0)
     s.add(webhook)
@@ -415,3 +446,113 @@ def gizli_adres(webhook: Webhook) -> str:
         return f"{p.hostname}/api/webhooks/{parcalar[-2]}/•••"
     yol = p.path if len(p.path) <= 40 else p.path[:39] + "…"
     return f"{p.netloc}{yol}" + ("?…" if p.query else "")
+
+
+# --- Discord sunucu bilgisi (yalnızca panel) ------------------------------------------------
+
+DISCORD_API = "https://discord.com/api/v10"
+_KIMLIK = re.compile(r"\d{1,25}")
+_DAVET = re.compile(r"https://(?:discord\.com/invite|discord\.gg)/[A-Za-z0-9-]{1,50}")
+
+
+def _json_nesne(yanit: httpx.Response | None) -> dict | None:
+    if yanit is None or yanit.status_code != 200:
+        return None
+    try:
+        veri = yanit.json()
+    except ValueError:
+        return None
+    return veri if isinstance(veri, dict) else None
+
+
+def _metin(deger, sinir: int = 100) -> str | None:
+    return _kirp(deger.strip(), sinir) if isinstance(deger, str) and deger.strip() else None
+
+
+def _kimlik(deger) -> str | None:
+    deger = str(deger) if isinstance(deger, (str, int)) else ""
+    return deger if _KIMLIK.fullmatch(deger) else None
+
+
+def _sayi(deger) -> int | None:
+    return deger if isinstance(deger, int) and not isinstance(deger, bool) else None
+
+
+def _davet_bilgisi(davet: str) -> dict:
+    """Davet bağlantısının sunucusu (adı, kimliği, üye sayıları); geçersizse `davet_hatasi`."""
+    kod = davet_kodu(davet)
+    if kod is None:
+        return {"davet_hatasi": "davet bağlantısı geçersiz"}
+    try:
+        yanit = _istek("GET", f"{DISCORD_API}/invites/{kod}?with_counts=true")
+    except (WebhookHatasi, httpx.HTTPError):
+        return {"davet_hatasi": "davet bilgisi alınamadı (bağlantı hatası)"}
+    if yanit.status_code == 404:
+        return {"davet_hatasi": "davet geçersiz ya da süresi dolmuş"}
+    veri = _json_nesne(yanit)
+    sunucu = veri.get("guild") if veri else None
+    if not isinstance(sunucu, dict):
+        return {"davet_hatasi": f"davet bilgisi okunamadı (HTTP {yanit.status_code})"}
+    return {"davet_sunucu_adi": _metin(sunucu.get("name")), "davet_sunucu_id": _kimlik(sunucu.get("id")),
+            "uye_sayisi": _sayi(veri.get("approximate_member_count")),
+            "cevrimici": _sayi(veri.get("approximate_presence_count"))}
+
+
+def discord_bilgisi_cek(url: str, davet: str | None = None) -> dict:
+    """Discord webhook'unun bağlı olduğu sunucu ve kanal. Asla fırlatmaz; sorun `hata` alanında.
+
+    Webhook adresi (anahtarıyla) GET edilince Discord webhook adını, sunucu ve kanal kimliğini
+    döner ama sunucu adını vermez. Sunucunun "Sunucu Widget'ı" ayarı açıksa widget.json'dan ad,
+    çevrim içi üye sayısı ve (varsa) davet bağlantısı da alınır. Ekleyenin verdiği davet
+    bağlantısı da sorgulanır: sunucu adını verir ve webhook'la aynı sunucuya mı ait, denetlenir.
+    """
+    try:
+        yanit = _istek("GET", url)
+    except WebhookHatasi as hata:
+        return {"hata": str(hata)}
+    except httpx.HTTPError as hata:
+        return {"hata": f"bağlantı hatası: {type(hata).__name__}"}
+    if yanit.status_code in _HEDEF_GITTI:
+        return {"hata": f"webhook Discord'da bulunamadı (HTTP {yanit.status_code}); silinmiş olabilir"}
+    veri = _json_nesne(yanit)
+    if veri is None:
+        return {"hata": f"Discord yanıtı okunamadı (HTTP {yanit.status_code})"}
+    bilgi = {"webhook_adi": _metin(veri.get("name")), "sunucu_id": _kimlik(veri.get("guild_id")),
+             "kanal_id": _kimlik(veri.get("channel_id")), "widget": False}
+    if bilgi["sunucu_id"]:
+        try:
+            widget = _json_nesne(_istek("GET", f"{DISCORD_API}/guilds/{bilgi['sunucu_id']}/widget.json"))
+        except (WebhookHatasi, httpx.HTTPError):
+            widget = None
+        if widget is not None:
+            widget_daveti = widget.get("instant_invite")
+            bilgi.update(
+                widget=True, sunucu_adi=_metin(widget.get("name")), cevrimici=_sayi(widget.get("presence_count")),
+                davet=widget_daveti if isinstance(widget_daveti, str) and _DAVET.fullmatch(widget_daveti) else None,
+            )
+    if davet:
+        d = _davet_bilgisi(davet)
+        bilgi["davet_hatasi"] = d.get("davet_hatasi")
+        if not d.get("davet_hatasi"):
+            # Davet başka bir sunucunun olabilir: eşleşmiyorsa adı sunucu adı diye gösterilmez.
+            eslesiyor = bool(bilgi["sunucu_id"]) and d["davet_sunucu_id"] == bilgi["sunucu_id"]
+            bilgi.update(davet_sunucu_adi=d["davet_sunucu_adi"], davet_sunucu_id=d["davet_sunucu_id"],
+                         davet_eslesiyor=eslesiyor)
+            if eslesiyor:
+                bilgi["sunucu_adi"] = bilgi.get("sunucu_adi") or d["davet_sunucu_adi"]
+                bilgi["uye_sayisi"] = d["uye_sayisi"]
+                if bilgi.get("cevrimici") is None:
+                    bilgi["cevrimici"] = d["cevrimici"]
+    return bilgi
+
+
+def discord_bilgisi_guncelle(s: Session, webhook: Webhook) -> dict:
+    try:
+        bilgi = discord_bilgisi_cek(webhook.url, webhook.davet)
+    except Exception as hata:  # noqa: BLE001 - panel sayfası düşmesin
+        logger.exception("webhook %s Discord bilgisi alınamadı", webhook.id)
+        bilgi = {"hata": f"beklenmeyen hata: {type(hata).__name__}"}
+    webhook.discord_bilgisi = bilgi
+    webhook.discord_bilgisi_zamani = _simdi()
+    s.commit()
+    return bilgi

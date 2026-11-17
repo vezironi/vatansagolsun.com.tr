@@ -19,15 +19,18 @@
     <label>Webhook adresi
       <input type="url" name="url" required maxlength="500" value="{{ form.url or '' }}" placeholder="https://discord.com/api/webhooks/…" autocomplete="off" spellcheck="false">
     </label>
-    <label>Ad (isteğe bağlı)
-      <input type="text" name="ad" maxlength="100" value="{{ form.ad or '' }}" placeholder="Örn. Sunucumuzun #duyurular kanalı">
+    <label>Ad
+      <input type="text" name="ad" required maxlength="100" value="{{ form.ad or '' }}" placeholder="Örn. Sunucumuzun #duyurular kanalı">
     </label>
-    <label>İletişim (isteğe bağlı)
-      <input type="text" name="iletisim" maxlength="200" value="{{ form.iletisim or '' }}" placeholder="Sorun olursa size ulaşabilmemiz için e-posta">
+    <label>E-posta
+      <input type="email" name="eposta" required maxlength="200" value="{{ form.eposta or '' }}" placeholder="Webhook'unuzla ilgili bildirimler için" autocomplete="email">
+    </label>
+    <label>Discord sunucu davet bağlantısı (Discord webhook'ları için zorunlu)
+      <input type="text" name="davet" maxlength="100" value="{{ form.davet or '' }}" placeholder="https://discord.gg/…" autocomplete="off" spellcheck="false">
     </label>
     <button type="submit">Webhook ekle</button>
   </form>
-  <p class="pnote">Discord'da: <b>Kanal ayarları → Entegrasyonlar → Webhook'lar → Yeni Webhook → Webhook URL'sini Kopyala</b>. Adres yalnızca <code>https://</code> olabilir; yerel ya da özel ağ adresleri kabul edilmez.</p>
+  <p class="pnote">Discord'da: <b>Kanal ayarları → Entegrasyonlar → Webhook'lar → Yeni Webhook → Webhook URL'sini Kopyala</b>. Davet bağlantısı için sunucu adına tıklayıp <b>İnsanları Davet Et</b>'i seçin; onaylarken webhook'un o sunucuya ait olduğunu kontrol ediyoruz, bu yüzden süresi dolmayan bir bağlantı verin. Adres yalnızca <code>https://</code> olabilir; yerel ya da özel ağ adresleri kabul edilmez.</p>
 
   <h2>Discord'da nasıl görünür?</h2>
   <div class="dc" aria-label="Discord mesajı önizlemesi">
